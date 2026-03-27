@@ -54,5 +54,15 @@ class CNNLSTMModel(nn.Module):
         self.confidence_head = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> dict:
-        # TODO: implement
-        raise NotImplementedError
+        # x: (batch, seq_len, feature_dim)
+        x = x.permute(0, 2, 1)                        # (batch, feature_dim, seq_len) for Conv1d
+        x = self.cnn(x)                               # (batch, 512, reduced_len)
+        x = x.permute(0, 2, 1)                        # (batch, reduced_len, 512)
+        x, _ = self.lstm(x)                            # (batch, reduced_len, 256)
+        x = x[:, -1, :]                               # son zaman adımı → (batch, 256)
+        x = self.fc(x)                                 # (batch, 128)
+        return {
+            "direction_logits": self.direction_head(x),
+            "price": self.price_head(x),
+            "confidence": self.confidence_head(x),
+        }

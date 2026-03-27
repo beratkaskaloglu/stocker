@@ -51,5 +51,30 @@ class MetaLearner(nn.Module):
             self.weight_net = nn.Sequential(nn.Linear(20, 4), nn.Softmax(dim=-1))
 
     def forward(self, model_outputs: list[dict]) -> dict:
-        # TODO: implement both modes
-        raise NotImplementedError
+        # model_outputs: 4 dict, her biri {direction_logits(3), price(1), confidence(1)}
+        # Concat: 4 × 5 = 20
+        flat = torch.cat([
+            torch.cat([o["direction_logits"], o["price"], o["confidence"]], dim=-1)
+            for o in model_outputs
+        ], dim=-1)  # (batch, 20)
+
+        if self.mode == "stacking":
+            x = self.net(flat)                         # (batch, 32)
+            return {
+                "direction_logits": self.direction_head(x),
+                "price": self.price_head(x),
+                "confidence": self.confidence_head(x),
+            }
+        else:  # weighted
+            weights = self.weight_net(flat)            # (batch, 4)
+            # Stack each output type: (batch, 4, dim)
+            directions = torch.stack([o["direction_logits"] for o in model_outputs], dim=1)
+            prices = torch.stack([o["price"] for o in model_outputs], dim=1)
+            confidences = torch.stack([o["confidence"] for o in model_outputs], dim=1)
+            # Weighted sum
+            w = weights.unsqueeze(-1)                  # (batch, 4, 1)
+            return {
+                "direction_logits": (directions * w).sum(dim=1),   # (batch, 3)
+                "price": (prices * w).sum(dim=1),                  # (batch, 1)
+                "confidence": (confidences * w).sum(dim=1).clamp(0, 1),  # (batch, 1)
+            }

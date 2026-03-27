@@ -58,8 +58,17 @@ class TransformerModel(nn.Module):
         self.confidence_head = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> dict:
-        # TODO: implement
-        raise NotImplementedError
+        # x: (batch, seq_len, feature_dim)
+        x = self.input_proj(x)                         # (batch, seq_len, d_model)
+        x = self.pos_encoding(x)                       # + positional encoding
+        x = self.encoder(x)                            # (batch, seq_len, d_model)
+        x = x.mean(dim=1)                              # mean pooling → (batch, d_model)
+        x = self.fc(x)                                 # (batch, 128)
+        return {
+            "direction_logits": self.direction_head(x),
+            "price": self.price_head(x),
+            "confidence": self.confidence_head(x),
+        }
 
 
 class PositionalEncoding(nn.Module):
