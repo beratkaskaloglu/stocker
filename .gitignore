@@ -1,0 +1,25 @@
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+
+# Veri & Model çıktıları (büyük dosyalar)
+db/*.db
+outputs/data/
+outputs/models/*.pt
+outputs/models/*.pth
+outputs/entropy/*.parquet
+outputs/features/*.parquet
+
+# Conda
+*.conda
+envs/
+
+# IDE
+.vscode/
+.idea/

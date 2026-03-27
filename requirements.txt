@@ -1,0 +1,48 @@
+# ── Veri ────────────────────────────────────
+yfinance>=0.2.36
+tvdatafeed>=2.4.0
+isyatirimhisse>=1.0.0
+finnhub-python>=2.4.19
+ccxt>=4.3.0
+python-binance>=1.0.19
+requests>=2.32.0
+
+# ── Veri İşleme ─────────────────────────────
+pandas>=2.2.0
+numpy>=1.26.0
+scipy>=1.13.0
+networkx>=3.3
+pyarrow>=16.0.0
+
+# ── Deep Learning ───────────────────────────
+torch>=2.3.0
+torchvision>=0.18.0
+transformers>=4.41.0
+scikit-learn>=1.5.0
+xgboost>=2.0.3
+
+# ── Reinforcement Learning ──────────────────
+stable-baselines3>=2.3.0
+gymnasium>=0.29.1
+
+# ── Sinyal İşleme & Feature Engineering ─────
+PyWavelets>=1.6.0
+pyts>=0.13.0
+statsmodels>=0.14.2
+
+# ── Teknik Analiz ───────────────────────────
+ta>=0.11.0
+
+# ── Altyapı ─────────────────────────────────
+click>=8.1.7
+loguru>=0.7.2
+pyyaml>=6.0.1
+python-dotenv>=1.0.1
+tqdm>=4.66.0
+
+# ── Claude Agent SDK ────────────────────────
+anthropic>=0.30.0
+
+# ── Test ────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.7

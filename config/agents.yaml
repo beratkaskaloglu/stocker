@@ -1,0 +1,37 @@
+agents:
+  orchestrator:
+    model: claude-opus-4-6
+    max_tokens: 8192
+
+  data_collector:
+    model: claude-opus-4-6
+    max_tokens: 4096
+    depends_on: []
+
+  entropy:
+    model: claude-opus-4-6
+    max_tokens: 4096
+    depends_on: [data_collector]
+
+  feature:
+    model: claude-opus-4-6
+    max_tokens: 4096
+    depends_on: [entropy]
+
+  train:
+    model: claude-opus-4-6
+    max_tokens: 8192
+    depends_on: [feature]
+    sub_agents: [lstm_trainer, cnn_lstm_trainer, transformer_trainer, resnet_trainer]
+    parallel: true
+
+  predict:
+    model: claude-opus-4-6
+    max_tokens: 4096
+    depends_on: [feature]
+
+  rl:
+    model: claude-opus-4-6
+    max_tokens: 4096
+    depends_on: [predict]
+    algorithms: [sac, dqn]

@@ -1,0 +1,18 @@
+market: US
+primary_source: finnhub
+fallback_source: tvdatafeed
+symbols_index: SP500            # S&P 500 constituent list
+n_symbols: 503
+
+news_source: finnhub
+news_language: en
+finbert_model: ProsusAI/finbert
+
+trading_hours:
+  open:  "09:30"
+  close: "16:00"
+  tz: America/New_York
+
+cron:
+  collect:  "0 23 * * 1-5"     # 23:00 TR = 16:00 NY
+  predict:  "30 14 * * 1-5"    # 14:30 TR = 09:30 NY
