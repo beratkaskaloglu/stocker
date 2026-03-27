@@ -10,25 +10,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+from loguru import logger
 
 
 class Storage:
-    """
-    PSEUDO:
-    1. __init__: SQLite bağlantısı aç, tablolar yoksa oluştur
-       Tables:
-         - ohlcv (symbol, market, timeframe, datetime, open, high, low, close, volume)
-         - news  (symbol, market, datetime, headline, sentiment_score)
-         - predictions (symbol, market, timeframe, datetime, direction, target_price, confidence)
-    2. save_ohlcv(df, market, timeframe):
-       a. df → SQLite upsert (conflict: replace)
-       b. df → CSV: outputs/data/{market}_{timeframe}_{date}.csv
-    3. load_ohlcv(symbol, market, timeframe, start, end) → DataFrame
-    4. write_agent_output(agent_name, payload: dict):
-       a. outputs/{agent_name}/latest.json yaz
-       b. payload: {agent, market, timeframe, timestamp, status, output_path, metadata}
-    5. read_agent_output(agent_name) → dict
-    """
+    """SQLite + CSV persistence layer for OHLCV, news, and predictions."""
 
     def __init__(self, db_path: str = "db/stocker.db"):
         self.db_path = Path(db_path)
@@ -36,18 +22,103 @@ class Storage:
         self._init_tables()
 
     def _init_tables(self):
-        # TODO: CREATE TABLE IF NOT EXISTS ...
-        raise NotImplementedError
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ohlcv (
+                    symbol    TEXT    NOT NULL,
+                    market    TEXT    NOT NULL,
+                    timeframe TEXT    NOT NULL,
+                    datetime  TEXT    NOT NULL,
+                    open      REAL,
+                    high      REAL,
+                    low       REAL,
+                    close     REAL,
+                    volume    REAL,
+                    PRIMARY KEY (symbol, market, timeframe, datetime)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS news (
+                    symbol          TEXT NOT NULL,
+                    market          TEXT NOT NULL,
+                    datetime        TEXT NOT NULL,
+                    headline        TEXT,
+                    sentiment_score REAL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS predictions (
+                    symbol       TEXT NOT NULL,
+                    market       TEXT NOT NULL,
+                    timeframe    TEXT NOT NULL,
+                    datetime     TEXT NOT NULL,
+                    direction    TEXT,
+                    target_price REAL,
+                    confidence   REAL
+                )
+            """)
+            conn.commit()
 
     def save_ohlcv(self, df: pd.DataFrame, market: str, timeframe: str) -> None:
-        # TODO: implement
-        raise NotImplementedError
+        """
+        OHLCV verisini SQLite'a upsert + CSV'ye yazar.
+
+        df must have columns: [symbol, open, high, low, close, volume]
+        and a datetime index.
+        """
+        if df.empty:
+            return
+
+        records = df.reset_index()
+        records["market"] = market
+        records["timeframe"] = timeframe
+        records["datetime"] = records["datetime"].astype(str)
+
+        cols = ["symbol", "market", "timeframe", "datetime",
+                "open", "high", "low", "close", "volume"]
+        records = records[cols]
+
+        with sqlite3.connect(self.db_path) as conn:
+            for _, row in records.iterrows():
+                conn.execute(
+                    """INSERT OR REPLACE INTO ohlcv
+                       (symbol, market, timeframe, datetime, open, high, low, close, volume)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (row["symbol"], row["market"], row["timeframe"], row["datetime"],
+                     row["open"], row["high"], row["low"], row["close"], row["volume"]),
+                )
+            conn.commit()
+
+        # CSV backup
+        date_str = datetime.now(timezone.utc).strftime("%Y%m%d")
+        csv_dir = Path("outputs/data")
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = csv_dir / f"{market}_{timeframe}_{date_str}.csv"
+        records.to_csv(csv_path, index=False, mode="a",
+                       header=not csv_path.exists())
+        logger.info(f"Saved {len(records)} rows → {self.db_path} + {csv_path}")
 
     def load_ohlcv(
         self, symbol: str, market: str, timeframe: str, start: str, end: str
     ) -> pd.DataFrame:
-        # TODO: implement
-        raise NotImplementedError
+        """SQLite'dan OHLCV verisi yükler."""
+        query = """
+            SELECT datetime, open, high, low, close, volume
+            FROM ohlcv
+            WHERE symbol = ? AND market = ? AND timeframe = ?
+              AND datetime >= ? AND datetime <= ?
+            ORDER BY datetime
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            df = pd.read_sql_query(query, conn, params=(symbol, market, timeframe, start, end))
+
+        if df.empty:
+            return df
+
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.set_index("datetime")
+        df["symbol"] = symbol
+        return df
 
     def write_agent_output(self, agent_name: str, payload: dict) -> None:
         out_dir = Path(f"outputs/{agent_name}")
