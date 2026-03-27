@@ -42,7 +42,12 @@ class ResNetGASFModel(nn.Module):
         self.confidence_head = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> dict:
-        # TODO: implement
-        # x shape: (batch, 3, 64, 64)
-        # backbone → (batch, 512, 1, 1) → flatten → (batch, 512)
-        raise NotImplementedError
+        # x: (batch, 3, 64, 64)
+        x = self.backbone(x)                           # (batch, 512, 1, 1)
+        x = x.flatten(1)                               # (batch, 512)
+        x = self.fc(x)                                 # (batch, 128)
+        return {
+            "direction_logits": self.direction_head(x),
+            "price": self.price_head(x),
+            "confidence": self.confidence_head(x),
+        }

@@ -67,11 +67,15 @@ class LSTMAttentionModel(nn.Module):
         self.confidence_head = nn.Sequential(nn.Linear(256, 1), nn.Sigmoid())
 
     def forward(self, x: torch.Tensor) -> dict:
-        # TODO: implement forward pass
-        # 1. embedding
-        # 2. lstm
-        # 3. attention + residual + norm
-        # 4. global avg pool
-        # 5. fc
-        # 6. 3 head çıktısı → dict
-        raise NotImplementedError
+        # x: (batch, seq_len, feature_dim)
+        x = self.embedding(x)                          # (batch, seq_len, 512)
+        lstm_out, _ = self.lstm(x)                     # (batch, seq_len, 1024)
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)  # (batch, seq_len, 1024)
+        x = self.norm(attn_out + lstm_out)             # residual + norm
+        x = x.mean(dim=1)                              # global avg pool → (batch, 1024)
+        x = self.fc(x)                                 # (batch, 256)
+        return {
+            "direction_logits": self.direction_head(x),       # (batch, 3)
+            "price": self.price_head(x),                      # (batch, 1)
+            "confidence": self.confidence_head(x),            # (batch, 1)
+        }
