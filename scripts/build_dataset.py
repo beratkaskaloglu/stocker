@@ -258,7 +258,7 @@ def generate_labels(
 
 
 # Multi-horizon label generation
-DAILY_HORIZONS = {"1d": 1, "15d": 15, "1m": 21}
+DAILY_HORIZONS = {"1d": 1, "15d": 15, "1m": 21, "3m": 63, "6m": 126, "1y": 252}
 INTRADAY_HORIZONS = {"1h": 1, "4h": 4}
 
 
@@ -560,7 +560,7 @@ def build_dataset(
         "n_symbols": len(stats),
         "horizons": horizon_names,
         "label_dist": label_dist,
-        "size_mb": round(size_mb, 1),
+        "size_mb": round(total_size_mb, 1),
     }
 
     summary_path = output.with_suffix(".json")

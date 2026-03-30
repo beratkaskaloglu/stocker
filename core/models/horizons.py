@@ -22,14 +22,17 @@ class Horizon:
     data_type: str      # "intraday" veya "daily"
 
 
-# Daily data horizons (2018+)
+# Daily data horizons (5 yıl)
 DAILY_HORIZONS = [
-    Horizon("1d",  "1 Gün",  1,   "daily"),
-    Horizon("15d", "15 Gün", 15,  "daily"),
-    Horizon("1m",  "1 Ay",   21,  "daily"),   # ~21 işlem günü
+    Horizon("1d",  "1 Gün",    1,   "daily"),
+    Horizon("15d", "15 Gün",   15,  "daily"),
+    Horizon("1m",  "1 Ay",     21,  "daily"),    # ~21 işlem günü
+    Horizon("3m",  "3 Ay",     63,  "daily"),    # ~63 işlem günü
+    Horizon("6m",  "6 Ay",     126, "daily"),    # ~126 işlem günü
+    Horizon("1y",  "1 Yıl",    252, "daily"),    # ~252 işlem günü
 ]
 
-# Intraday data horizons (son 2 yıl)
+# Intraday data horizons (son 2 yıl, 1h bar)
 INTRADAY_HORIZONS = [
     Horizon("1h",  "1 Saat", 1,   "intraday"),  # 1h bar → 1 bar ileri
     Horizon("4h",  "4 Saat", 4,   "intraday"),  # 1h bar → 4 bar ileri
@@ -37,7 +40,15 @@ INTRADAY_HORIZONS = [
 
 # Tüm horizonlar
 ALL_HORIZONS = INTRADAY_HORIZONS + DAILY_HORIZONS
-DEFAULT_HORIZON_NAMES = [h.name for h in ALL_HORIZONS]  # ["1h", "4h", "1d", "15d", "1m"]
+DEFAULT_HORIZON_NAMES = [h.name for h in ALL_HORIZONS]
+
+# Sadece daily horizon isimleri (dataset build için)
+DAILY_HORIZON_NAMES = [h.name for h in DAILY_HORIZONS]
+INTRADAY_HORIZON_NAMES = [h.name for h in INTRADAY_HORIZONS]
+
+# Horizon → periods lookup
+DAILY_HORIZON_PERIODS = {h.name: h.periods for h in DAILY_HORIZONS}
+INTRADAY_HORIZON_PERIODS = {h.name: h.periods for h in INTRADAY_HORIZONS}
 
 
 # ─── Multi-Horizon Output Head ──────────────────────────────────────────────
