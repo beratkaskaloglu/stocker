@@ -51,9 +51,11 @@ class SupervisedTrainer:
     - Per-epoch metrics JSON export
     """
 
-    def __init__(self, model: nn.Module, config: TrainConfig):
+    def __init__(self, model: nn.Module, config: TrainConfig,
+                 symbol_names: list[str] | None = None):
         self.model = model
         self.config = config
+        self.symbol_names = symbol_names  # index → symbol name mapping
 
         # Device
         if config.device == "auto":
@@ -318,7 +320,7 @@ class SupervisedTrainer:
 
     @torch.no_grad()
     def _validate(self, loader: torch.utils.data.DataLoader, epoch: int) -> dict:
-        """Validation pass with per-class metrics — supports multi-horizon."""
+        """Validation pass with per-class and per-symbol metrics."""
         self.model.eval()
         total_loss = 0.0
         correct = 0
@@ -330,6 +332,14 @@ class SupervisedTrainer:
         class_correct = [0, 0, 0]
         class_total = [0, 0, 0]
         class_predicted = [0, 0, 0]
+
+        # Per-symbol tracking (all horizons)
+        has_symbols = self.symbol_names is not None
+        if has_symbols:
+            n_syms = len(self.symbol_names)
+            # Per horizon per symbol: {horizon: {sym_idx: {correct, total}}}
+            sym_horizon_correct = {}
+            sym_horizon_total = {}
 
         for batch in loader:
             x = batch["features"].to(self.device)
@@ -343,25 +353,59 @@ class SupervisedTrainer:
             total += t
             n_batches += 1
 
-            # Per-class stats (first horizon)
+            # Detect multi-horizon
             first_val = next(iter(out.values()))
             is_multi = isinstance(first_val, dict)
+
             if is_multi:
-                h = list(out.keys())[0]
-                logits = out[h]["direction_logits"]
-                y_key = f"direction_{h}"
-                y_dir = batch[y_key].to(self.device) if y_key in batch else batch["direction"].to(self.device)
+                horizons = list(out.keys())
+                # Per-class stats (first horizon only)
+                h0 = horizons[0]
+                logits_h0 = out[h0]["direction_logits"]
+                y_key = f"direction_{h0}"
+                y_dir_h0 = batch[y_key].to(self.device) if y_key in batch else batch["direction"].to(self.device)
+                preds_h0 = logits_h0.argmax(dim=1)
+
+                for cls in range(3):
+                    mask_actual = (y_dir_h0 == cls)
+                    mask_pred = (preds_h0 == cls)
+                    class_total[cls] += mask_actual.sum().item()
+                    class_predicted[cls] += mask_pred.sum().item()
+                    class_correct[cls] += (mask_actual & mask_pred).sum().item()
+
+                # Per-symbol per-horizon accuracy
+                if has_symbols and "symbol_idx" in batch:
+                    sym_idx = batch["symbol_idx"]
+                    for h in horizons:
+                        if h not in sym_horizon_correct:
+                            sym_horizon_correct[h] = np.zeros(n_syms, dtype=np.int64)
+                            sym_horizon_total[h] = np.zeros(n_syms, dtype=np.int64)
+
+                        h_logits = out[h]["direction_logits"]
+                        h_y_key = f"direction_{h}"
+                        if h_y_key in batch:
+                            h_y = batch[h_y_key].to(self.device)
+                        else:
+                            continue
+                        h_preds = h_logits.argmax(dim=1)
+                        h_correct = (h_preds == h_y).cpu().numpy()
+                        h_sym = sym_idx.numpy()
+
+                        for s in range(n_syms):
+                            mask = (h_sym == s)
+                            if mask.any():
+                                sym_horizon_total[h][s] += mask.sum()
+                                sym_horizon_correct[h][s] += h_correct[mask].sum()
             else:
                 logits = out["direction_logits"]
                 y_dir = batch["direction"].to(self.device)
-
-            preds = logits.argmax(dim=1)
-            for cls in range(3):
-                mask_actual = (y_dir == cls)
-                mask_pred = (preds == cls)
-                class_total[cls] += mask_actual.sum().item()
-                class_predicted[cls] += mask_pred.sum().item()
-                class_correct[cls] += (mask_actual & mask_pred).sum().item()
+                preds = logits.argmax(dim=1)
+                for cls in range(3):
+                    mask_actual = (y_dir == cls)
+                    mask_pred = (preds == cls)
+                    class_total[cls] += mask_actual.sum().item()
+                    class_predicted[cls] += mask_pred.sum().item()
+                    class_correct[cls] += (mask_actual & mask_pred).sum().item()
 
         per_class = {}
         for c, name in enumerate(class_names):
@@ -373,10 +417,29 @@ class SupervisedTrainer:
                 "actual_count": class_total[c], "predicted_count": class_predicted[c],
             }
 
+        # Build per-symbol results
+        per_symbol = {}
+        if has_symbols and sym_horizon_correct:
+            for h in sym_horizon_correct:
+                for s in range(n_syms):
+                    t_count = int(sym_horizon_total[h][s])
+                    if t_count == 0:
+                        continue
+                    c_count = int(sym_horizon_correct[h][s])
+                    sym_name = self.symbol_names[s]
+                    if sym_name not in per_symbol:
+                        per_symbol[sym_name] = {}
+                    per_symbol[sym_name][h] = {
+                        "accuracy": c_count / t_count,
+                        "correct": c_count,
+                        "total": t_count,
+                    }
+
         return {
             "total_loss": total_loss / max(n_batches, 1),
             "accuracy": correct / max(total, 1),
             "per_class": per_class,
+            "per_symbol": per_symbol,
         }
 
     def _log_epoch(self, epoch: int, train: dict, val: dict) -> None:
@@ -424,6 +487,56 @@ class SupervisedTrainer:
                         log_data[f"val/recall_{cls_name}"] = cls_data["recall"]
                         log_data[f"val/f1_{cls_name}"] = cls_data["f1"]
             wandb.log(log_data, step=epoch)
+
+        # Per-symbol logging (every 10 epochs + last epoch)
+        if val and "per_symbol" in val and val["per_symbol"]:
+            per_sym = val["per_symbol"]
+            show_detail = (epoch % 10 == 0 or epoch == self.config.epochs)
+
+            if show_detail:
+                # Console: top 5 best + bottom 5 worst (1d horizon)
+                first_h = None
+                for sym_data in per_sym.values():
+                    first_h = next(iter(sym_data.keys()), None)
+                    break
+
+                if first_h:
+                    sym_accs = []
+                    for sym, hdata in per_sym.items():
+                        if first_h in hdata:
+                            sym_accs.append((sym, hdata[first_h]["accuracy"], hdata[first_h]["total"]))
+                    sym_accs.sort(key=lambda x: x[1], reverse=True)
+
+                    logger.info(f"    ── Per-symbol accuracy ({first_h}) ──")
+                    logger.info(f"    TOP 5:")
+                    for sym, acc, cnt in sym_accs[:5]:
+                        logger.info(f"      {sym:6s} acc={acc:.3f} (n={cnt})")
+                    logger.info(f"    BOTTOM 5:")
+                    for sym, acc, cnt in sym_accs[-5:]:
+                        logger.info(f"      {sym:6s} acc={acc:.3f} (n={cnt})")
+                    avg_acc = np.mean([a for _, a, _ in sym_accs])
+                    logger.info(f"    AVG: {avg_acc:.3f} ({len(sym_accs)} symbols)")
+
+            # TensorBoard: per-symbol accuracy for each horizon
+            for sym, hdata in per_sym.items():
+                for h, metrics in hdata.items():
+                    self.writer.add_scalar(f"Symbol_{h}/{sym}", metrics["accuracy"], epoch)
+
+            # Save per-symbol JSON snapshot
+            sym_json_dir = self.log_dir / "per_symbol"
+            sym_json_dir.mkdir(parents=True, exist_ok=True)
+            sym_snapshot = {
+                "epoch": epoch,
+                "model": self.config.model_name,
+                "symbols": {}
+            }
+            for sym, hdata in per_sym.items():
+                sym_snapshot["symbols"][sym] = {
+                    h: {"acc": round(m["accuracy"], 4), "n": m["total"]}
+                    for h, m in hdata.items()
+                }
+            snapshot_path = sym_json_dir / f"epoch_{epoch:03d}.json"
+            snapshot_path.write_text(json.dumps(sym_snapshot, indent=2))
 
         # History
         record = {"epoch": epoch, **{f"train_{k}": v for k, v in train.items() if not isinstance(v, dict)}}

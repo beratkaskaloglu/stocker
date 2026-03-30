@@ -55,7 +55,8 @@ class MultiHorizonDataset(Dataset):
         y_direction_1m, y_return_1m
     """
 
-    def __init__(self, X: np.ndarray, labels: dict[str, tuple], horizon_names: list[str]):
+    def __init__(self, X: np.ndarray, labels: dict[str, tuple], horizon_names: list[str],
+                 symbol_indices: np.ndarray | None = None):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.horizon_names = horizon_names
         self.labels = {}
@@ -63,6 +64,7 @@ class MultiHorizonDataset(Dataset):
             direction, returns = labels[h]
             self.labels[f"direction_{h}"] = torch.tensor(direction, dtype=torch.long)
             self.labels[f"return_{h}"] = torch.tensor(returns, dtype=torch.float32)
+        self.symbol_indices = torch.tensor(symbol_indices, dtype=torch.long) if symbol_indices is not None else None
 
     def __len__(self):
         return len(self.X)
@@ -71,13 +73,16 @@ class MultiHorizonDataset(Dataset):
         item = {"features": self.X[idx]}
         for key, tensor in self.labels.items():
             item[key] = tensor[idx]
+        if self.symbol_indices is not None:
+            item["symbol_idx"] = self.symbol_indices[idx]
         return item
 
 
 class GASFMultiHorizonDataset(Dataset):
     """GASF images + multi-horizon labels."""
 
-    def __init__(self, images: np.ndarray, labels: dict[str, tuple], horizon_names: list[str]):
+    def __init__(self, images: np.ndarray, labels: dict[str, tuple], horizon_names: list[str],
+                 symbol_indices: np.ndarray | None = None):
         self.images = torch.tensor(images, dtype=torch.float32)
         self.horizon_names = horizon_names
         self.labels = {}
@@ -85,6 +90,7 @@ class GASFMultiHorizonDataset(Dataset):
             direction, returns = labels[h]
             self.labels[f"direction_{h}"] = torch.tensor(direction, dtype=torch.long)
             self.labels[f"return_{h}"] = torch.tensor(returns, dtype=torch.float32)
+        self.symbol_indices = torch.tensor(symbol_indices, dtype=torch.long) if symbol_indices is not None else None
 
     def __len__(self):
         return len(self.images)
@@ -93,14 +99,18 @@ class GASFMultiHorizonDataset(Dataset):
         item = {"features": self.images[idx]}
         for key, tensor in self.labels.items():
             item[key] = tensor[idx]
+        if self.symbol_indices is not None:
+            item["symbol_idx"] = self.symbol_indices[idx]
         return item
 
 
-def load_dataset(data_path: str) -> tuple[np.ndarray, dict, list[str]]:
+def load_dataset(data_path: str) -> tuple[np.ndarray, dict, list[str], np.ndarray | None, list[str] | None]:
     """
     Load dataset from either:
     - .npz file (legacy)
     - directory with .npy files (memory-efficient, for large datasets)
+
+    Returns: X, labels, horizon_names, symbol_indices, symbol_names
     """
     path = Path(data_path)
 
@@ -122,7 +132,19 @@ def load_dataset(data_path: str) -> tuple[np.ndarray, dict, list[str]]:
             y_ret = np.load(path / f"y_return_{h}.npy")
             labels[h] = (y_dir, y_ret)
 
-        return X, labels, horizon_names
+        # Load symbol info if available
+        symbol_indices = None
+        symbol_names = None
+        symbols_file = path / "symbols.txt"
+        if symbols_file.exists():
+            all_symbols = symbols_file.read_text().strip().split("\n")
+            unique_symbols = sorted(set(all_symbols))
+            sym_to_idx = {s: i for i, s in enumerate(unique_symbols)}
+            symbol_indices = np.array([sym_to_idx[s] for s in all_symbols], dtype=np.int64)
+            symbol_names = unique_symbols
+            logger.info(f"  Symbol tracking: {len(unique_symbols)} unique symbols")
+
+        return X, labels, horizon_names, symbol_indices, symbol_names
 
     # .npz format (legacy)
     data = np.load(str(path), allow_pickle=True)
@@ -142,7 +164,7 @@ def load_dataset(data_path: str) -> tuple[np.ndarray, dict, list[str]]:
         elif "y_direction" in data:
             labels[h] = (data["y_direction"], data["y_return"])
 
-    return X, labels, horizon_names
+    return X, labels, horizon_names, None, None
 
 
 def create_synthetic_multi_horizon(
@@ -160,7 +182,11 @@ def create_synthetic_multi_horizon(
             np.random.randint(0, 3, size=n_samples).astype(np.int64),
             np.random.randn(n_samples).astype(np.float32) * 0.02,
         )
-    return X, labels, horizon_names
+    # Synthetic: fake 10 symbols
+    n_syms = 10
+    symbol_indices = np.random.randint(0, n_syms, size=n_samples).astype(np.int64)
+    symbol_names = [f"SYN_{i:03d}" for i in range(n_syms)]
+    return X, labels, horizon_names, symbol_indices, symbol_names
 
 
 # ─── Main training pipeline ─────────────────────────────────────────────────
@@ -182,25 +208,28 @@ def train_all_models(
     # ── Load data ──
     if data_path and Path(data_path).exists():
         logger.info(f"Loading data from {data_path}")
-        X, labels, horizon_names = load_dataset(data_path)
+        X, labels, horizon_names, symbol_indices, symbol_names = load_dataset(data_path)
     else:
         logger.warning("No data_path — using synthetic data for testing")
-        X, labels, horizon_names = create_synthetic_multi_horizon()
+        X, labels, horizon_names, symbol_indices, symbol_names = create_synthetic_multi_horizon()
 
     feature_dim = X.shape[2]
     seq_len = X.shape[1]
     n_samples = X.shape[0]
     logger.info(f"Data: {n_samples} samples, seq_len={seq_len}, features={feature_dim}")
     logger.info(f"Horizons: {horizon_names}")
+    if symbol_names:
+        logger.info(f"Symbols: {len(symbol_names)} unique")
 
     # For large datasets on limited RAM: subsample if needed
     max_samples = 200_000  # ~6GB RAM for (200K, 60, 125) float32
     if n_samples > max_samples:
         logger.warning(f"Dataset too large for RAM ({n_samples}). Subsampling to {max_samples}.")
-        # Temporal subsample: take evenly spaced indices to preserve time distribution
         indices = np.linspace(0, n_samples - 1, max_samples, dtype=int)
-        X = np.array(X[indices])  # copy from memmap to RAM
+        X = np.array(X[indices])
         labels = {h: (d[indices], r[indices]) for h, (d, r) in labels.items()}
+        if symbol_indices is not None:
+            symbol_indices = symbol_indices[indices]
         n_samples = max_samples
         logger.info(f"  Subsampled: {n_samples} samples")
 
@@ -213,6 +242,8 @@ def train_all_models(
     split_idx = int(n_samples * 0.8)
     labels_train = {h: (d[:split_idx], r[:split_idx]) for h, (d, r) in labels.items()}
     labels_val = {h: (d[split_idx:], r[split_idx:]) for h, (d, r) in labels.items()}
+    sym_train = symbol_indices[:split_idx] if symbol_indices is not None else None
+    sym_val = symbol_indices[split_idx:] if symbol_indices is not None else None
 
     # ── Train sequence models ──
     results = {}
@@ -229,12 +260,12 @@ def train_all_models(
             batch_size=batch_size, device=device, use_wandb=use_wandb,
         )
 
-        train_ds = MultiHorizonDataset(X[:split_idx], labels_train, horizon_names)
-        val_ds = MultiHorizonDataset(X[split_idx:], labels_val, horizon_names)
+        train_ds = MultiHorizonDataset(X[:split_idx], labels_train, horizon_names, sym_train)
+        val_ds = MultiHorizonDataset(X[split_idx:], labels_val, horizon_names, sym_val)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
-        trainer = SupervisedTrainer(model, config)
+        trainer = SupervisedTrainer(model, config, symbol_names=symbol_names)
         result = trainer.train(train_loader, val_loader)
         results[model_name] = result
         logger.info(f"{model_name} done — best_val_loss={result['best_val_loss']:.4f}")
@@ -260,10 +291,10 @@ def train_all_models(
         batch_size=batch_size, device=device, use_wandb=use_wandb,
     )
 
-    resnet_train = GASFMultiHorizonDataset(gasf_features[:split_idx], labels_train, horizon_names)
-    resnet_val = GASFMultiHorizonDataset(gasf_features[split_idx:], labels_val, horizon_names)
+    resnet_train = GASFMultiHorizonDataset(gasf_features[:split_idx], labels_train, horizon_names, sym_train)
+    resnet_val = GASFMultiHorizonDataset(gasf_features[split_idx:], labels_val, horizon_names, sym_val)
 
-    resnet_trainer = SupervisedTrainer(resnet_model, resnet_config)
+    resnet_trainer = SupervisedTrainer(resnet_model, resnet_config, symbol_names=symbol_names)
     result = resnet_trainer.train(
         DataLoader(resnet_train, batch_size=batch_size, shuffle=True),
         DataLoader(resnet_val, batch_size=batch_size, shuffle=False),
