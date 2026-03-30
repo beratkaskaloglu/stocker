@@ -18,6 +18,10 @@
 8. [Worktree Stratejisi](#8-worktree-stratejisi)
 9. [GPU Eğitim Workflow'u](#9-gpu-eğitim-workflowu)
 10. [Veri Kaynakları](#10-veri-kaynakları)
+11. [Pipeline Test Sonuçları](#11-pipeline-test-sonuçları-28-mart-2026)
+12. [Kod Raporu](#12-kod-raporu) → `STOCKER_CODE_REPORT.md`
+13. [GPU Eğitim Rehberi](#13-gpu-eğitim-rehberi)
+14. [Gerçek Veri Toplama & Dataset](#14-gerçek-veri-toplama--dataset)
 
 ---
 
@@ -849,22 +853,260 @@ ANTHROPIC_API_KEY=your_key_here
 
 ---
 
+## 11. Pipeline Test Sonuçları (28 Mart 2026)
+
+### 11.1 Test Durumu: 17/17 PASSED
+
+```
+tests/test_train_pipeline.py — 7.35s
+├── test_returns_calculator        ✅ Log returns DR, DR² hesabı
+├── test_shannon_entropy           ✅ H_norm ∈ [0,1] doğrulandı
+├── test_transfer_entropy          ✅ KSG estimator — bağımsız serilerde TE ≈ 0
+├── test_info_flow_graph           ✅ NetworkX DiGraph + 5 centrality feature
+├── test_gasf_encoder              ✅ 64×64 GASF image, cos(phi_i + phi_j)
+├── test_lstm_attention            ✅ Forward pass — 3 head output
+├── test_cnn_lstm                  ✅ Forward pass — Conv1d×3 + LSTM
+├── test_transformer               ✅ Forward pass — positional encoding
+├── test_resnet_gasf               ✅ Forward pass — ResNet-18 modified
+├── test_meta_learner              ✅ Stacking + weighted mode
+├── test_full_model_pipeline       ✅ 4 model → meta-learner zinciri
+├── test_signal_generator          ✅ Error-adjusted confidence filtering
+├── test_error_module              ✅ XGBoost cold start + auto-retrain
+├── test_trading_env               ✅ DQN + SAC env step/reset
+├── test_rl_training_short         ✅ DQN loss=0.0013, SAC actor_loss=-1.97
+├── test_backtest_walkforward      ✅ 12 fold walk-forward split
+└── test_training_loop             ✅ Supervised loss: 1.38 → 1.17 (10 step)
+```
+
+### 11.2 Düzeltilen Buglar
+
+| Bug | Dosya | Sorun | Çözüm |
+|-----|-------|-------|-------|
+| **GASF NotImplemented** | `core/features/gasf.py` | Worktree agent encode() yazmamıştı | `arccos(x_norm) → cos(phi_i + phi_j)` tam implementasyon |
+| **TE KSG Yanlış Formül** | `core/entropy/transfer.py` | Bağımsız serilerde TE ≈ 3.09 çıkıyordu | 4-space KSG: `ψ(k) - <ψ(n_xz+1)> - <ψ(n_marginal+1)> + <ψ(n_z+1)>` |
+| **SAC Env Step** | `rl/env.py:99` | `float(np.clip(action,...))` array'de hata | `float(np.clip(np.asarray(action).flatten()[0], -1, 1))` |
+| **SAC Predict** | `rl/sac_agent.py:81` | Aynı array-to-float bug | `float(np.asarray(action).flatten()[0])` |
+| **XGBoost libomp** | macOS dependency | `libomp` eksikti | `brew install libomp` |
+
+### 11.3 Henüz Implement Edilmemiş Modüller
+
+| Modül | Durum | Öncelik |
+|-------|--------|---------|
+| `core/features/frequency.py` | NotImplementedError — FFT + Wavelet | Orta |
+| `core/features/aggregator.py` | NotImplementedError — Feature birleştirme | Yüksek |
+| `core/features/tvpvar.py` | Dosya yok — TVP-VAR | Düşük |
+
+---
+
+## 12. Eğitim Altyapısı & Monitoring
+
+### 12.1 Yeni Modüller
+
+| Dosya | Açıklama |
+|-------|----------|
+| `core/training/trainer.py` | SupervisedTrainer — TensorBoard + wandb + early stopping + grad clip + checkpoint |
+| `core/training/dataset.py` | StockerDataset + DataLoader factory + synthetic data generator |
+| `core/training/train_all.py` | 4 model + ResNet GASF pipeline — tek komutla eğitim |
+
+### 12.2 Monitoring Araçları
+
+**TensorBoard (her zaman aktif):**
+```bash
+# Eğitim sırasında veya sonrasında:
+tensorboard --logdir outputs/logs/US
+# Tarayıcıda: http://localhost:6006
+```
+
+İzlenebilen metrikler:
+- `Loss/train`, `Loss/val` — toplam kayıp
+- `Loss/train_direction`, `Loss/val_direction` — yön tahmini kaybı
+- `Loss/train_price`, `Loss/val_price` — fiyat kaybı
+- `Loss/train_confidence`, `Loss/val_confidence` — güven kaybı
+- `Accuracy/train`, `Accuracy/val` — yön doğruluğu
+- `Training/lr` — learning rate (ReduceLROnPlateau)
+- `Training/grad_norm` — gradient norm
+
+**Weights & Biases (opsiyonel, remote monitoring):**
+```bash
+pip install wandb && wandb login
+python -m core.training.train_all --market US --epochs 100 --wandb
+# wandb.ai dashboard'dan izle (telefon/tablet dahil)
+```
+
+### 12.3 Eğitim Komutları
+
+```bash
+# Local test (CPU, synthetic data)
+python -m core.training.train_all --market US --epochs 3 --device cpu
+
+# GPU eğitimi (gerçek data ile)
+python -m core.training.train_all --market US --epochs 100 --device cuda --data data/US_features.npz
+
+# wandb ile remote monitoring
+python -m core.training.train_all --market US --epochs 100 --device cuda --wandb
+
+# BIST eğitimi
+python -m core.training.train_all --market BIST --epochs 100 --device cuda --data data/BIST_features.npz
+```
+
+### 12.4 Çıktı Yapısı
+
+```
+outputs/
+├── models/
+│   └── US/
+│       ├── lstm_attention/
+��       │   ├── best.pt          ← en iyi val_loss checkpoint
+│       │   ├── final.pt         ← son epoch
+│       │   └── epoch_010.pt     ← periyodik checkpoint
+��       ├── cnn_lstm/best.pt
+│       ├── transformer/best.pt
+│       ├── resnet_gasf/best.pt
+│       └── training_summary.json  ← tüm modellerin özet metrikleri
+└── logs/
+    └── US/
+        ├── lstm_attention/
+        │   ├── events.out.tfevents.*  ← TensorBoard log
+        │   └── training_history.json  ← epoch-by-epoch JSON
+        ├── cnn_lstm/
+        ├── transformer/
+        └── resnet_gasf/
+```
+
+### 12.5 CPU Test Sonucu (3 epoch, synthetic data)
+
+```
+Model                val_loss   Süre
+─────────────────────────────────────
+lstm_attention       1.4557     27.7s
+cnn_lstm             1.4554     12.0s
+transformer          1.4500     21.4s
+resnet_gasf          1.4627    282.4s (GASF encode dahil)
+─────────────────────────────────────
+TOPLAM                          5.7 dk
+```
+
+---
+
+## 13. GPU Eğitim Rehberi
+
+### 13.1 Nerede Başlatılır?
+
+| Servis | GPU | Fiyat | Tahmini Süre (100 epoch) | Öneri |
+|--------|-----|-------|--------------------------|-------|
+| **RunPod** | A100 40GB | ~$0.5-1.5/saat | ~1 saat | En ucuz, community image |
+| **Vast.ai** | A100/H100 | ~$0.5-3/saat | ~1 saat | Spot pricing, esnek |
+| **Lambda Labs** | A100 80GB | ~$1.9/saat | ~1 saat | Sabit fiyat, güvenilir |
+| **Colab Pro+** | A100 | ~$50/ay | ~1-2 saat | Kolay kurulum |
+
+### 13.2 GPU'ya Deploy
+
+```bash
+# 1. Kodu kopyala
+rsync -avz --exclude='outputs/' --exclude='.git/' --exclude='__pycache__/' \
+  ./stocker/ user@gpu-server:/workspace/stocker/
+
+# 2. Environment kur
+ssh user@gpu-server
+conda create -n stocker python=3.11 -y && conda activate stocker
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+pip install tensorboard wandb
+
+# 3. tmux içinde eğitimi başlat
+tmux new -s training
+python -m core.training.train_all --market US --epochs 100 --device cuda --wandb
+
+# 4. TensorBoard'u tunnel ile izle
+# Local terminalde:
+ssh -L 6006:localhost:6006 user@gpu-server
+tensorboard --logdir /workspace/stocker/outputs/logs/US --port 6006
+
+# 5. Modeli geri al
+rsync -avz user@gpu-server:/workspace/stocker/outputs/models/ ./outputs/models/
+```
+
+---
+
+## 14. Gerçek Veri Toplama & Dataset (28 Mart 2026)
+
+### 14.1 Veri Kaynakları
+
+| Kaynak | Veri | Maliyet | Rate Limit |
+|--------|------|---------|------------|
+| **yfinance** | OHLCV (günlük) | Ücretsiz | Yok |
+| **Finnhub** | Şirket haberleri | Ücretsiz (60 req/min) | 1.5s/istek |
+
+### 14.2 Toplanan Veri (İlk Batch)
+
+```
+Tarih aralığı: 2024-01-01 → 2026-03-28
+Semboller: S&P 500 top 50
+OHLCV: 2,805 satır (data/ohlcv_2024-01-01_2026-03-28.csv)
+Haberler: 4,817 makale (data/news_2024-01-01_2026-03-28.json)
+```
+
+### 14.3 Dataset Pipeline (`scripts/build_dataset.py`)
+
+```
+Ham Veri → Feature Engineering → Normalization → .npz
+
+Adımlar:
+1. OHLCV yükle, sembol bazında ayır
+2. Her sembol için 125 feature hesapla:
+   - DR, DR², Rolling Stats (6)
+   - Rolling Shannon Entropy (1)
+   - FFT top-32 components (64)
+   - Wavelet decomposition (20)
+   - Teknik indikatörler — ta kütüphanesi (30)
+   - FinBERT sentiment (4)
+3. Label üret: close pct_change > ±1% → Up/Down, else Hold
+4. Sliding window: (N, 60, 125)
+5. IQR-based robust normalization
+6. Kaydet: data/US_dataset.npz
+```
+
+### 14.4 Kullanım
+
+```bash
+# FinBERT ile (MPS/CPU, ~10-15 dk)
+conda activate stocker
+python scripts/build_dataset.py \
+  --ohlcv data/ohlcv_2024-01-01_2026-03-28.csv \
+  --news data/news_2024-01-01_2026-03-28.json \
+  --out data/US_dataset.npz
+
+# FinBERT olmadan (hızlı test, keyword sentiment)
+python scripts/build_dataset.py \
+  --ohlcv data/ohlcv_2024-01-01_2026-03-28.csv \
+  --news data/news_2024-01-01_2026-03-28.json \
+  --out data/US_dataset.npz --no-finbert
+```
+
+---
+
 ## Sonraki Adımlar
 
 ```
-[ ] 1. Git repo init + GitHub remote
-[ ] 2. Miniconda env + requirements.txt commit
-[ ] 3. Worktree'leri oluştur (git worktree add ...)
-[ ] 4. core/data modülünü yaz — Finnhub + IsYatirim collector
-[ ] 5. core/entropy modülünü yaz — KSG estimator
-[ ] 6. core/features modülünü yaz — GASF + FFT + Wavelet
-[ ] 7. core/models — 4 mimari + meta-learner
-[ ] 8. agents/ — FinBERT + FinBERT-TR + market agent
-[ ] 9. rl/ — SAC + DQN + trading env
-[ ] 10. signals/ — generator + error module
-[ ] 11. backtest/ — walk-forward engine
-[ ] 12. claude_agents/ — orchestrator + sub-agents
-[ ] 13. GPU'da eğitim
-[ ] 14. Backtest + değerlendirme
-[ ] 15. Live trading bağlantısı
+[x] 1. Git repo init + GitHub remote
+[x] 2. Miniconda env + requirements.txt commit
+[x] 3. Worktree'leri oluştur (git worktree add ...)
+[x] 4. core/data modülünü yaz — Finnhub + IsYatirim collector
+[x] 5. core/entropy modülünü yaz — KSG estimator
+[x] 6. core/features modülünü yaz — GASF ✅ | FFT ✅ | Wavelet ✅ | Aggregator ✅
+[x] 7. core/models — 4 mimari + meta-learner
+[x] 8. agents/ — FinBERT + FinBERT-TR + market agent
+[x] 9. rl/ — SAC + DQN + trading env
+[x] 10. signals/ — generator + error module
+[x] 11. backtest/ — walk-forward engine
+[x] 12. claude_agents/ — orchestrator + sub-agents
+[x] 13. Pipeline testi — 17/17 PASSED ✅
+[x] 14. Training altyapısı — TensorBoard + wandb + early stopping + checkpoint
+[x] 15. 4 model eğitim testi — CPU'da 3 epoch başarılı (5.7 dk)
+[x] 16. Gerçek veri toplama — yfinance OHLCV + Finnhub news (S&P 500 top 50)
+[x] 17. build_dataset.py — OHLCV+News → .npz (FinBERT sentiment + 125 feature)
+[ ] 18. FinBERT ile sentiment hesapla + dataset oluştur
+[ ] 19. GPU'da tam eğitim (100 epoch + 5000 episode RL, gerçek veri)
+[ ] 20. Backtest + değerlendirme (gerçek veriyle)
+[ ] 21. Live trading bağlantısı
 ```

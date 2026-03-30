@@ -16,6 +16,7 @@
 | **C. Agent Mimarisi** | Ana agentlar, sub-agentlar, aralarındaki mesaj akışı |
 | **D. Claude Code Entegrasyonu** | Agentları Claude Code'dan nasıl çalıştıracağız |
 | **E. Worktree Stratejisi** | Her modül/agent için ayrı worktree planı |
+| **F. Kod Raporu** | Tüm dosyaların durumu, pseudo-code, test sonuçları → `STOCKER_CODE_REPORT.md` |
 
 ---
 
@@ -186,14 +187,16 @@ git worktree add ../stocker-models feat/models
 ## 7. Ana Belge Yazım Sırası
 
 ```
-[ ] 1. Repo init + git setup (main branch)
-[ ] 2. Bölüm B: Klasör yapısı + modül sınırları
-[ ] 3. Bölüm A: Öğrenme algoritması akışı
-[ ] 4. Bölüm B: Veri akış diyagramı (Mermaid)
-[ ] 5. Bölüm C: Agent mimarisi tabloları
-[ ] 6. Bölüm D: Claude Code komutları
-[ ] 7. Bölüm E: Worktree kurulum scriptleri
-[ ] 8. Son review + gap check
+[x] 1. Repo init + git setup (main branch)
+[x] 2. Bölüm B: Klasör yapısı + modül sınırları
+[x] 3. Bölüm A: Öğrenme algoritması akışı
+[x] 4. Bölüm B: Veri akış diyagramı (Mermaid)
+[x] 5. Bölüm C: Agent mimarisi tabloları
+[x] 6. Bölüm D: Claude Code komutları
+[x] 7. Bölüm E: Worktree kurulum scriptleri
+[x] 8. Pipeline testi (17/17 PASSED — 28 Mart 2026)
+[ ] 9. GPU eğitimi + gerçek veri ile backtest
+[ ] 10. Live trading entegrasyonu
 ```
 
 ---

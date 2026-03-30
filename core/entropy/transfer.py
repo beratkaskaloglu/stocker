@@ -57,37 +57,47 @@ class TransferEntropy:
         joint = joint + np.random.default_rng(42).normal(0, eps, joint.shape)
         marginal = marginal + np.random.default_rng(42).normal(0, eps, marginal.shape)
 
-        # KSG: kNN distances in joint space
-        tree_joint = cKDTree(joint)
-        tree_marginal = cKDTree(marginal)
-
-        # k-th neighbor distance in joint space (Chebyshev / max norm)
-        dists_joint, _ = tree_joint.query(joint, k=self.k + 1, p=np.inf)
-        epsilon = dists_joint[:, -1]  # k-th neighbor distance
-
-        # Count neighbors within epsilon in marginal space
-        n_marginal = np.array([
-            tree_marginal.query_ball_point(marginal[i], r=epsilon[i] + 1e-15, p=np.inf).__len__() - 1
-            for i in range(n)
-        ])
-
-        # Count neighbors within epsilon in Y_past space
-        tree_ypast = cKDTree(y_past + np.random.default_rng(42).normal(0, eps, y_past.shape))
-        n_ypast = np.array([
-            tree_ypast.query_ball_point(y_past[i], r=epsilon[i] + 1e-15, p=np.inf).__len__() - 1
-            for i in range(n)
-        ])
-
-        # KSG formula: TE ≈ ψ(k) - <ψ(n_marginal)> + <ψ(n_ypast)>
-        # Simplified: TE ≈ mean(log(n_ypast) - log(n_marginal))
-        # Avoid log(0)
-        n_marginal = np.maximum(n_marginal, 1)
-        n_ypast = np.maximum(n_ypast, 1)
-
         from scipy.special import digamma
-        te = digamma(self.k) - np.mean(digamma(n_marginal)) + np.mean(digamma(n_ypast))
 
-        # Clip negatives (noise artifact)
+        # KSG: kNN distances in full joint space (Y_future, Y_past, X_past)
+        tree_joint = cKDTree(joint)
+        dists_joint, _ = tree_joint.query(joint, k=self.k + 1, p=np.inf)
+        epsilon = dists_joint[:, -1]  # k-th neighbor distance (Chebyshev)
+
+        # Marginal spaces for the KSG-TE decomposition:
+        # Space XZ = (Y_past, X_past) — conditioning on both
+        xz = np.column_stack([y_past, x_past])
+        xz = xz + np.random.default_rng(42).normal(0, eps, xz.shape)
+        # Space Z = Y_past only — conditioning on target's own past
+        z = y_past + np.random.default_rng(43).normal(0, eps, y_past.shape)
+
+        tree_marginal = cKDTree(marginal)  # (Y_future, Y_past)
+        tree_xz = cKDTree(xz)
+        tree_z = cKDTree(z)
+
+        # Count neighbours within epsilon in each marginal
+        n_marginal = np.zeros(n, dtype=int)
+        n_xz = np.zeros(n, dtype=int)
+        n_z = np.zeros(n, dtype=int)
+
+        for i in range(n):
+            r = epsilon[i] + 1e-15
+            n_marginal[i] = len(tree_marginal.query_ball_point(marginal[i], r=r, p=np.inf)) - 1
+            n_xz[i] = len(tree_xz.query_ball_point(xz[i], r=r, p=np.inf)) - 1
+            n_z[i] = len(tree_z.query_ball_point(z[i], r=r, p=np.inf)) - 1
+
+        # Floor at 1 to avoid digamma(0)
+        n_marginal = np.maximum(n_marginal, 1)
+        n_xz = np.maximum(n_xz, 1)
+        n_z = np.maximum(n_z, 1)
+
+        # KSG formula for Transfer Entropy:
+        # TE(X→Y) = ψ(k) - <ψ(n_xz + 1)> - <ψ(n_marginal + 1)> + <ψ(n_z + 1)>
+        te = (digamma(self.k)
+              - np.mean(digamma(n_xz + 1))
+              - np.mean(digamma(n_marginal + 1))
+              + np.mean(digamma(n_z + 1)))
+
         return float(max(te, 0.0))
 
     def compute_net(self, x: np.ndarray, y: np.ndarray, tau: int) -> float:

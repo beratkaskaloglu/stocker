@@ -96,7 +96,7 @@ class StockerTradingEnv(gym.Env):
         if self.mode == "dqn":
             trade_cost = self._execute_dqn_action(int(action), price)
         else:
-            target_position_frac = float(np.clip(action, -1.0, 1.0))
+            target_position_frac = float(np.clip(np.asarray(action).flatten()[0], -1.0, 1.0))
             trade_cost = self._execute_sac_action(target_position_frac, price)
 
         # --- advance to next price ---

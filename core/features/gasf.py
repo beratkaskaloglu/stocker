@@ -35,12 +35,31 @@ class GASFEncoder:
         self.image_size = image_size
 
     def encode(self, series: np.ndarray) -> np.ndarray:
-        # TODO: implement GASF encoding
-        raise NotImplementedError
+        """Zaman serisi → GASF 2D image (image_size × image_size)."""
+        series = np.asarray(series, dtype=np.float64)
+        # Normalize to [-1, 1]
+        _min, _max = series.min(), series.max()
+        if _max - _min < 1e-12:
+            x_norm = np.zeros_like(series)
+        else:
+            x_norm = 2.0 * (series - _min) / (_max - _min) - 1.0
+        x_norm = np.clip(x_norm, -1.0, 1.0)
+
+        # Resample to image_size if needed
+        if len(x_norm) != self.image_size:
+            indices = np.linspace(0, len(x_norm) - 1, self.image_size).astype(int)
+            x_norm = x_norm[indices]
+
+        # Angular encoding
+        phi = np.arccos(x_norm)
+
+        # GASF: G[i,j] = cos(phi_i + phi_j)
+        gasf = np.cos(phi[:, None] + phi[None, :])
+        return gasf.astype(np.float32)
 
     def encode_batch(self, series_matrix: np.ndarray) -> np.ndarray:
-        # TODO: implement batch encoding
-        raise NotImplementedError
+        """Shape (n_stocks, T) → (n_stocks, image_size, image_size)."""
+        return np.stack([self.encode(s) for s in series_matrix], axis=0)
 
     def to_rgb(self, gasf: np.ndarray) -> np.ndarray:
         # (H, W) → (3, H, W) — aynı kanalı 3 kez tekrarla

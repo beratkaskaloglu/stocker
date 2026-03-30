@@ -1,40 +1,26 @@
 """
 core/models/lstm_attention.py
-LSTM + Multi-head Attention modeli.
+LSTM + Multi-head Attention modeli — multi-horizon tahmin.
 """
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 
+from core.models.horizons import MultiHorizonHead, DEFAULT_HORIZON_NAMES
+
 
 class LSTMAttentionModel(nn.Module):
     """
-    PSEUDO (Architecture):
-
-    Input: (batch, seq_len=60, feature_dim=211)
+    Input: (batch, seq_len=60, feature_dim)
         │
-        ├─ Linear(211, hidden=256)   → embedding
-        │
-        ├─ LSTM(256, 512, layers=2, dropout=0.3, bidirectional=True)
-        │   Output: (batch, seq_len, 1024)   [bidirectional: 512*2]
-        │
-        ├─ Multi-head Attention(heads=8, d_model=1024)
-        │   Output: (batch, seq_len, 1024)
-        │
+        ├─ Linear(feature_dim, 256)  → embedding
+        ├─ LSTM(256, 512, layers=2, bidirectional) → (batch, seq_len, 1024)
+        ├─ Multi-head Attention(8 heads) → (batch, seq_len, 1024)
         ├─ Layer Norm + Residual
-        │
         ├─ Global Avg Pool → (batch, 1024)
-        │
-        ├─ FC(1024, 256) → ReLU → Dropout(0.3)
-        │
-        └─ 3 çıkış kafası:
-           ├─ direction_head:  FC(256, 3)     → logits {-1, 0, +1}
-           ├─ price_head:      FC(256, 1)     → target price (normalized)
-           └─ confidence_head: FC(256, 1) → Sigmoid → [0, 1]
-
-    Loss:
-        total = CrossEntropy(direction) + MSE(price) * 0.3 + BCE(confidence) * 0.1
+        ├─ FC(1024, 256) → ReLU → Dropout
+        └─ MultiHorizonHead(256) → per-horizon (direction, price, confidence)
     """
 
     def __init__(
@@ -44,6 +30,7 @@ class LSTMAttentionModel(nn.Module):
         num_layers: int = 2,
         num_heads: int = 8,
         dropout: float = 0.3,
+        horizon_names: list[str] | None = None,
     ):
         super().__init__()
         self.embedding = nn.Linear(feature_dim, hidden_size)
@@ -61,21 +48,13 @@ class LSTMAttentionModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
         )
-        # Output heads
-        self.direction_head = nn.Linear(256, 3)
-        self.price_head = nn.Linear(256, 1)
-        self.confidence_head = nn.Sequential(nn.Linear(256, 1), nn.Sigmoid())
+        self.heads = MultiHorizonHead(256, horizon_names or DEFAULT_HORIZON_NAMES)
 
     def forward(self, x: torch.Tensor) -> dict:
-        # x: (batch, seq_len, feature_dim)
-        x = self.embedding(x)                          # (batch, seq_len, 512)
-        lstm_out, _ = self.lstm(x)                     # (batch, seq_len, 1024)
-        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)  # (batch, seq_len, 1024)
-        x = self.norm(attn_out + lstm_out)             # residual + norm
-        x = x.mean(dim=1)                              # global avg pool → (batch, 1024)
-        x = self.fc(x)                                 # (batch, 256)
-        return {
-            "direction_logits": self.direction_head(x),       # (batch, 3)
-            "price": self.price_head(x),                      # (batch, 1)
-            "confidence": self.confidence_head(x),            # (batch, 1)
-        }
+        x = self.embedding(x)
+        lstm_out, _ = self.lstm(x)
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        x = self.norm(attn_out + lstm_out)
+        x = x.mean(dim=1)
+        x = self.fc(x)
+        return self.heads(x)

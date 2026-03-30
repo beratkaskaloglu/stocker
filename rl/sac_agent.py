@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import EvalCallback
 
@@ -78,7 +79,7 @@ class SACTradingAgent:
 
     def predict(self, state) -> float:
         action, _ = self.model.predict(state, deterministic=True)
-        return float(action.clip(-1.0, 1.0))
+        return float(np.asarray(action).flatten()[0])
 
     def save(self, path: str) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)

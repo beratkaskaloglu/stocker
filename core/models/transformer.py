@@ -1,6 +1,6 @@
 """
 core/models/transformer.py
-Transformer Encoder — haber sentimenti + market feature fusion.
+Transformer Encoder — haber sentimenti + market feature fusion, multi-horizon tahmin.
 """
 from __future__ import annotations
 
@@ -8,29 +8,18 @@ import math
 import torch
 import torch.nn as nn
 
+from core.models.horizons import MultiHorizonHead, DEFAULT_HORIZON_NAMES
+
 
 class TransformerModel(nn.Module):
     """
-    PSEUDO (Architecture):
-
-    Input: (batch, seq_len=60, feature_dim=211)
+    Input: (batch, seq_len=60, feature_dim)
         │
-        ├─ Positional Encoding (sinusoidal)
-        │
-        ├─ Linear(211, d_model=256)
-        │
-        ├─ Transformer Encoder × 4 layers:
-        │   each: MultiheadAttention(heads=8) → FF(1024) → LayerNorm
-        │   Output: (batch, seq_len, 256)
-        │
-        ├─ [CLS token] veya mean pooling → (batch, 256)
-        │
-        ├─ FC(256, 128) → GELU → Dropout(0.3)
-        │
-        └─ 3 output head
-
-    Transformer'ın avantajı: Sentiment vektörü ile fiyat feature'larını
-    global attention ile ilişkilendirebilir.
+        ├─ Linear(feature_dim, d_model=256) + Positional Encoding
+        ├─ Transformer Encoder × 4 layers
+        ├─ Mean pooling → (batch, 256)
+        ├─ FC(256, 128) → GELU → Dropout
+        └─ MultiHorizonHead(128) → per-horizon (direction, price, confidence)
     """
 
     def __init__(
@@ -42,6 +31,7 @@ class TransformerModel(nn.Module):
         dim_feedforward: int = 1024,
         dropout: float = 0.3,
         max_seq_len: int = 60,
+        horizon_names: list[str] | None = None,
     ):
         super().__init__()
         self.input_proj = nn.Linear(feature_dim, d_model)
@@ -53,22 +43,15 @@ class TransformerModel(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.fc = nn.Sequential(nn.Linear(d_model, 128), nn.GELU(), nn.Dropout(dropout))
-        self.direction_head = nn.Linear(128, 3)
-        self.price_head = nn.Linear(128, 1)
-        self.confidence_head = nn.Sequential(nn.Linear(128, 1), nn.Sigmoid())
+        self.heads = MultiHorizonHead(128, horizon_names or DEFAULT_HORIZON_NAMES)
 
     def forward(self, x: torch.Tensor) -> dict:
-        # x: (batch, seq_len, feature_dim)
-        x = self.input_proj(x)                         # (batch, seq_len, d_model)
-        x = self.pos_encoding(x)                       # + positional encoding
-        x = self.encoder(x)                            # (batch, seq_len, d_model)
-        x = x.mean(dim=1)                              # mean pooling → (batch, d_model)
-        x = self.fc(x)                                 # (batch, 128)
-        return {
-            "direction_logits": self.direction_head(x),
-            "price": self.price_head(x),
-            "confidence": self.confidence_head(x),
-        }
+        x = self.input_proj(x)
+        x = self.pos_encoding(x)
+        x = self.encoder(x)
+        x = x.mean(dim=1)
+        x = self.fc(x)
+        return self.heads(x)
 
 
 class PositionalEncoding(nn.Module):

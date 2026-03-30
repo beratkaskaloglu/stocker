@@ -23,3 +23,22 @@ envs/
 # IDE
 .vscode/
 .idea/
+
+# Claude Code
+.claude/
+
+# Veri dosyaları (büyük)
+data/
+outputs/
+
+# Memory (kişisel)
+memory/
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Word docs
+*.docx
