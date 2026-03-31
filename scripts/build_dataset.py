@@ -20,9 +20,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
+
+# Ensure project root is on sys.path (needed when running as script)
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
 import pandas as pd
@@ -151,7 +157,12 @@ def _finbert_sentiment(
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     model.eval()
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     model = model.to(device)
     logger.info(f"FinBERT loaded on {device}")
 
